@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fixing MDE Onboarding on Windows 11 - NordicAgentic</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+
+<body>
+    <header>
+        <div class="nav-container">
+            <a href="index.html" class="logo">
+                <img src="assets/images/logo.png" alt="NordicAgentic Logo">
+            </a>
+            <nav>
+                <ul>
+                    <li><a href="index.html" class="active">Blog</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+    <main>
+        <article class="post-container">
+            <header class="post-header">
+                <div class="post-meta">December 16, 2025</div>
+                <h1>Fixing MDE Onboarding "Not Applicable" Issues on Windows 11</h1>
+            </header>
+
+            <img src="assets/images/mde-header.png" alt="Windows 11 Security Fixing" class="post-image">
+
+            <div class="post-content">
+                <p>If you're deploying Microsoft Defender for Endpoint (MDE) to Windows 11 devices using Intune, you
+                    might have hit a frustrating wall. Some devices stubbornly refuse to onboard, showing up as
+                    <strong>"Not applicable"</strong> in your device configuration profiles. It's a ghost in the machine
+                    that leaves your endpoints vulnerable.</p>
+
+                <h3>The Symptom</h3>
+                <p>You might first notice this in the <strong>Endpoint security | Overview</strong> dashboard, where a
+                    chunk of your devices are listed as "Not Onboarded".</p>
+                <img src="assets/images/mde-issue-overview.png"
+                    alt="Endpoint Security Overview showing not onboarded devices"
+                    style="width: 100%; border-radius: 8px; margin: 1rem 0;">
+
+                <p>Digging deeper into the <strong>Device configuration</strong> status, you see the dreaded grey
+                    status: "Not applicable".</p>
+                <img src="assets/images/mde-issue-not-applicable.png"
+                    alt="Device configuration showing Not Applicable status"
+                    style="width: 100%; border-radius: 8px; margin: 1rem 0;">
+
+                <h3>The Resolution</h3>
+                <p>After some investigation, I found that this specific issue on Windows 11 often relates to a missing
+                    Windows capability. The fix involves two main steps:</p>
+                <ol>
+                    <li>Adding the specific Windows Capability for the Sense Client.</li>
+                    <li>Re-initiating the onboarding script.</li>
+                </ol>
+
+                <p>We can automate this entire fix using an Intune <strong>Proactive Remediation</strong> script.</p>
+
+                <h4>Step 1: The Missing Capability</h4>
+                <p>The core of the fix is running this DISM command to add the Sense Client capability:</p>
+                <code class="language-powershell"
+                    style="display:block; padding: 1rem; background: #2d2d2d; color: #f8f8f2; border-radius: 4px; overflow-x: auto;">DISM /online /Add-Capability /CapabilityName:Microsoft.Windows.Sense.Client~~~~</code>
+
+                <h4>Step 2: The Proactive Remediation Script</h4>
+                <p>To deploy this at scale, I've created a Detection and Remediation script pair. This will
+                    automatically identify affected devices and apply the fix.</p>
+
+                <h5>Detection Script</h5>
+                <p>This script checks if the MDE service is running and if the registry keys are correctly populated.
+                </p>
+                <pre><code class="language-powershell" style="display:block; padding: 1rem; background: #2d2d2d; color: #f8f8f2; border-radius: 4px; overflow-x: auto;"># Custom PS Script: Detection Script for MDE_OnboardingFix
+# Bassem Louati
+
+$null = Start-Transcript -Path "${env:ProgramData}\Microsoft\IntuneManagementExtension\Logs\MDE_OnboardingFix_DetectionScript.log" -Append -Force
+$exitCode = 0
+$registryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows Advanced Threat Protection"
+$registryValueName = "OnboardingInfo"
+
+function Check-RegistryValue {
+    if (Test-Path $registryPath) {
+        if (Get-ItemProperty -Path $registryPath -Name $registryValueName -ErrorAction Ignore) {
+            if (Get-ItemPropertyValue -Path $registryPath -Name $registryValueName -ErrorAction Ignore) {
+                Write-Host "The registry value exists."
+                return $true
+            }
+        }
+        else {
+            Write-Warning "The registry value name does not exist."
+            return $false
+        }
+    }
+    else {
+        Write-Warning "The path to this value does not exist."
+        return $false
+    }
+}
+
+function Check-ATPProcess {
+    $WindowsDefenderATPExecutable = Get-Process -Name MsSense -ErrorAction SilentlyContinue
+    if ($WindowsDefenderATPExecutable -eq $Null) {
+        Write-Warning "Process is not running"
+        return $false
+    }
+    else {
+        Write-Host "Process is running"
+        return $true
+    }
+}
+
+$registryCheck = Check-RegistryValue
+$processCheck = Check-ATPProcess
+
+if ($registryCheck -and $processCheck) {
+    Write-Host "Both checks passed."
+    $exitCode = 0
+}
+else {
+    Write-Warning "One or both checks failed: RegistryCheck: $registryCheck | ProcessCheck: $processCheck"
+    $exitCode = 1
+}
+
+$null = Stop-Transcript
+exit $exitCode</code></pre>
+
+                <h5>Remediation Script</h5>
+                <p>The remediation script installs the missing capability and then re-runs the local onboarding script.
+                    <strong>Important:</strong> You must download your specific onboarding package from the Microsoft
+                    Defender portal and insert the content where indicated.</p>
+
+                <p>Go to <strong>security.microsoft.com > Settings > Endpoints > Onboarding</strong>, select "Windows 10
+                    and 11", and download the "Local Script".</p>
+                <img src="assets/images/mde-download-script.png" alt="Downloading the onboarding package"
+                    style="width: 100%; border-radius: 8px; margin: 1rem 0;">
+
+                <pre><code class="language-powershell" style="display:block; padding: 1rem; background: #2d2d2d; color: #f8f8f2; border-radius: 4px; overflow-x: auto;"># Custom PS Script: Remediation Script for MDE_OnboardingFix
+# Bassem Louati
+
+$logPath = "${env:ProgramData}\Microsoft\IntuneManagementExtension\Logs\MDE_OnboardingFix_RemediationScript.log"
+$null = Start-Transcript -Path $logPath -Append -Force
+
+# Check if the capability exists
+$capabilityName = "Microsoft.Windows.Sense.Client~~~~"
+$capability = Get-WindowsCapability -Online | Where-Object { $_.Name -eq $capabilityName }
+
+if ($capability) {
+    Write-Host "Capability found: $($capability.Name)" -ForegroundColor Green
+    Write-Host "State: $($capability.State)" -ForegroundColor Yellow
+    
+    # Check if it's already installed
+    if ($capability.State -eq "Installed") {
+        Write-Host "The capability is already installed." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "Installing capability..." -ForegroundColor Yellow
+        DISM /online /Add-Capability /CapabilityName:$capabilityName
+    }
+}
+else {
+    Write-Host "Capability '$capabilityName' not found in available capabilities." -ForegroundColor Red
+}
+
+# NOTE: Insert your MDE onboarding script content below
+$cmdScript = @"
+REM Paste the content of your .cmd file downloaded from security.microsoft.com here
+REM This section will execute the MDE onboarding commands
+"@
+
+# Create temp file
+$tempFile = [System.IO.Path]::GetTempFileName()
+Rename-Item $tempFile "$tempFile.cmd"
+$tempFile = "$tempFile.cmd"
+
+# Write script to file
+$cmdScript | Out-File -FilePath $tempFile -Encoding ASCII
+
+# Execute the script
+cmd /c $tempFile
+
+# Clean up
+Remove-Item $tempFile
+
+$null = Stop-Transcript
+exit 0</code></pre>
+
+                <p>By deploying this proactive remediation, you ensure that any Windows 11 device missing the Sense
+                    Client capability gets fixed automatically, bringing those "Not Applicable" devices back into the
+                    fold.</p>
+            </div>
+
+            <div style="margin-top: 3rem; text-align: center;">
+                <a href="index.html" class="read-more">&larr; Back to Blog</a>
+            </div>
+        </article>
+    </main>
+    <footer>
+        <p>&copy; 2025 NordicAgentic. All rights reserved.</p>
+        <p style="font-size: 0.8rem; margin-top: 0.5rem; opacity: 0.7;">Empowering IT with Agentic AI</p>
+    </footer>
+</body>
+
+</html>
